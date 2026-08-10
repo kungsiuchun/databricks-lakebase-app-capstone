@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=1920">
+    <title>Stock Watcher - Ticker Detail</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/detail.css') }}">
+    <!-- Lightweight Charts Library -->
+    <script src="https://unpkg.com/lightweight-charts@5.0.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+    <!-- Top Navigation -->
+    <nav class="top-nav">
+        <div class="nav-container">
+            <div class="nav-left">
+                <a href="/" class="logo">📈 Stock Watcher</a>
+            </div>
+            
+            <div class="nav-center">
+                <!-- Search Bar -->
+                <div class="search-box">
+                    <input 
+                        type="text" 
+                        id="ticker-search" 
+                        placeholder="Search ticker symbol or company name"
+                        autocomplete="off"
+                    >
+                    <button id="search-btn" class="search-btn">🔍</button>
+                </div>
+            </div>
+            
+            <div class="nav-right">
+                <!-- Watchlist button removed - using back link instead -->
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Loading State -->
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>Loading ticker data...</p>
+        </div>
+
+        <!-- Error State -->
+        <div id="error-state" class="error-state hidden">
+            <div class="error-icon">⚠️</div>
+            <h2 id="error-title">Ticker not found</h2>
+            <p id="error-message">Please try a different ticker symbol</p>
+            <button onclick="window.location.href='/'" class="btn-primary">Back to Watchlist</button>
+        </div>
+
+        <!-- Content Container -->
+        <div id="content" class="content-container hidden">
+            <!-- Back to Watchlist Link -->
+            <a href="/" class="back-link">← Back to Watchlist</a>
+            
+            <!-- Company Header -->
+            <div class="company-header">
+                <div class="header-left">
+                    <div id="company-logo-container" class="company-logo-container">
+                        <img id="company-logo" src="" alt="Company Logo" class="company-logo">
+                        <div id="company-initials" class="company-initials" style="display: none;"></div>
+                    </div>
+                    <div class="company-title">
+                        <h1 id="company-name">Loading...</h1>
+                        <div class="company-subtitle">
+                            <span id="ticker-symbol" class="ticker-badge">-</span>
+                            <span id="exchange" class="exchange-badge" title="Stock Exchange">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="header-right">
+                    <div class="price-display">
+                        <div class="current-price" id="current-price">$0.00</div>
+                        <div id="price-change" class="price-change">+$0.00 (+0.00%)</div>
+                    </div>
+                    <button id="add-to-watchlist" class="btn-watchlist">
+                        <span class="star-icon">☆</span> Add to Watchlist
+                    </button>
+                </div>
+            </div>
+
+            <!-- Company Info Grid -->
+            <div class="info-grid">
+                <div class="info-card">
+                    <div class="info-label">Market Cap</div>
+                    <div class="info-value" id="market-cap">-</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">Employees</div>
+                    <div class="info-value" id="employees">-</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">Industry</div>
+                    <div class="info-value" id="industry">-</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">IPO Date</div>
+                    <div class="info-value" id="ipo-date">-</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">Type</div>
+                    <div class="info-value" id="security-type">-</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">Homepage</div>
+                    <div class="info-value">
+                        <a id="homepage-link" href="#" target="_blank" class="link">Visit Website</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Company Description -->
+            <div class="section-card">
+                <h2 class="section-title">About the Company</h2>
+                <p id="company-description" class="description-text">
+                    Loading company description...
+                </p>
+            </div>
+
+            <!-- Interactive Price Chart -->
+            <div class="section-card">
+                <div class="chart-header">
+                    <h2 class="section-title">Price Chart</h2>
+                    <div class="chart-controls">
+                        <!-- Chart Type Selector -->
+                        <div class="control-group">
+                            <button class="chart-type-btn active" data-chart-type="candlestick" title="Candlestick Chart">
+                                📊
+                            </button>
+                            <button class="chart-type-btn" data-chart-type="line" title="Line Chart">
+                                📈
+                            </button>
+                            <button class="chart-type-btn" data-chart-type="area" title="Area Chart">
+                                📉
+                            </button>
+                        </div>
+                        
+                        <!-- Timeframe Selector -->
+                        <div class="control-group">
+                            <button class="timeframe-btn" data-timeframe="1D">1D</button>
+                            <button class="timeframe-btn" data-timeframe="1W">1W</button>
+                            <button class="timeframe-btn" data-timeframe="1M">1M</button>
+                            <button class="timeframe-btn active" data-timeframe="3M">3M</button>
+                            <button class="timeframe-btn" data-timeframe="1Y">1Y</button>
+                            <button class="timeframe-btn" data-timeframe="YTD">YTD</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="price-chart-container" class="chart-container"></div>
+            </div>
+
+            <!-- Recent News Section -->
+            <div class="section-card">
+                <h2 class="section-title">Recent News</h2>
+                <div id="news-container" class="news-container">
+                    <!-- Loading state -->
+                    <div id="news-loading" class="loading-state">
+                        <div class="spinner"></div>
+                        <p>Loading news...</p>
+                    </div>
+                    <!-- Error state -->
+                    <div id="news-error" class="error-state" style="display: none;">
+                        <p>Failed to load news</p>
+                    </div>
+                    <!-- Empty state -->
+                    <div id="news-empty" class="empty-state" style="display: none;">
+                        <p>📰 No recent news available</p>
+                    </div>
+                    <!-- News articles will be rendered here -->
+                    <div id="news-list" style="display: none;"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/chart.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/news.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/detail.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Watcher - Watchlist</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary-blue: #3b82f6;
+            --success-green: #10b981;
+            --danger-red: #ef4444;
+            --bg-light: #f9fafb;
+            --bg-white: #ffffff;
+            --text-dark: #111827;
+            --text-gray: #6b7280;
+            --border-gray: #e5e7eb;
+            --hover-gray: #f3f4f6;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+            background: var(--bg-light);
+            color: var(--text-dark);
+            line-height: 1.6;
+        }
+
+        /* Top Navigation */
+        .top-nav {
+            background: var(--bg-white);
+            border-bottom: 1px solid var(--border-gray);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        .nav-container {
+            max-width: 1920px;
+            margin: 0 auto;
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary-blue);
+            text-decoration: none;
+            flex-shrink: 0;
+        }
+
+        .search-box {
+            flex: 1;
+            max-width: 600px;
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        #ticker-search {
+            flex: 1;
+            padding: 0.75rem 1rem;
+            font-size: 1rem;
+            border: 2px solid var(--border-gray);
+            border-radius: 8px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        #ticker-search:focus {
+            border-color: var(--primary-blue);
+        }
+
+        .search-btn {
+            padding: 0.75rem 1.5rem;
+            background: var(--primary-blue);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .search-btn:hover {
+            background: #2563eb;
+        }
+
+        /* Main Content */
+        .container {
+            max-width: 1920px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 1.5rem;
+            color: var(--text-dark);
+        }
+
+        /* Watchlist Grid */
+        .watchlist-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .ticker-card {
+            background: var(--bg-white);
+            padding: 1.5rem;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+
+        .ticker-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+            border-color: var(--primary-blue);
+        }
+
+        .ticker-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .ticker-symbol {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-dark);
+        }
+
+        .delete-btn {
+            background: var(--danger-red);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .delete-btn:hover {
+            background: #dc2626;
+        }
+
+        .ticker-price {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-dark);
+        }
+
+        .ticker-updated {
+            font-size: 0.875rem;
+            color: var(--text-gray);
+            margin-top: 0.5rem;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            background: var(--bg-white);
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        .empty-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+
+        .empty-state h2 {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+            color: var(--text-dark);
+        }
+
+        .empty-state p {
+            color: var(--text-gray);
+            margin-bottom: 1.5rem;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-gray);
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 4px solid var(--border-gray);
+            border-top-color: var(--primary-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Toast Notifications */
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            padding: 1rem 1.5rem;
+            background: var(--success-green);
+            color: white;
+            border-radius: 8px;
+            font-weight: 500;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 9999;
+            animation: slideIn 0.3s ease;
+        }
+
+        .toast.error {
+            background: var(--danger-red);
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Top Navigation -->
+    <nav class="top-nav">
+        <div class="nav-container">
+            <a href="/" class="logo">📈 Stock Watcher</a>
+            
+            <div class="search-box">
+                <input 
+                    type="text" 
+                    id="ticker-search" 
+                    placeholder="Search ticker symbol (e.g., AAPL, MSFT, GOOGL)"
+                    autocomplete="off"
+                >
+                <button id="search-btn" class="search-btn">🔍 Search</button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container">
+        <h1>📊 My Watchlist</h1>
+        
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>Loading watchlist...</p>
+        </div>
+
+        <div id="empty-state" class="empty-state" style="display: none;">
+            <div class="empty-icon">📭</div>
+            <h2>Your watchlist is empty</h2>
+            <p>Search for a ticker above to get started!</p>
+        </div>
+
+        <div id="watchlist" class="watchlist-grid" style="display: none;"></div>
+    </div>
+
+    <script>
+        // Load watchlist on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            loadWatchlist();
+            
+            // Set up search
+            document.getElementById('search-btn').addEventListener('click', handleSearch);
+            document.getElementById('ticker-search').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') handleSearch();
+            });
+        });
+
+        // Handle search
+        function handleSearch() {
+            const searchInput = document.getElementById('ticker-search');
+            const symbol = searchInput.value.trim().toUpperCase();
+            
+            if (symbol) {
+                window.location.href = `/ticker?symbol=${symbol}`;
+            }
+        }
+
+        // Load watchlist from API
+        async function loadWatchlist() {
+            try {
+                const response = await fetch('/watchlist');
+                if (!response.ok) throw new Error('Failed to load watchlist');
+                
+                const watchlist = await response.json();
+                
+                document.getElementById('loading').style.display = 'none';
+                
+                if (watchlist.length === 0) {
+                    document.getElementById('empty-state').style.display = 'block';
+                } else {
+                    document.getElementById('watchlist').style.display = 'grid';
+                    renderWatchlist(watchlist);
+                }
+            } catch (error) {
+                console.error('Error loading watchlist:', error);
+                document.getElementById('loading').innerHTML = 
+                    '<p style="color: #ef4444;">❌ Failed to load watchlist</p>';
+            }
+        }
+
+        // Render watchlist cards
+        function renderWatchlist(watchlist) {
+            const container = document.getElementById('watchlist');
+            container.innerHTML = '';
+            
+            watchlist.forEach(item => {
+                const card = document.createElement('div');
+                card.className = 'ticker-card';
+                card.onclick = (e) => {
+                    // Don't navigate if clicking delete button
+                    if (!e.target.classList.contains('delete-btn')) {
+                        window.location.href = `/ticker?symbol=${item.symbol}`;
+                    }
+                };
+                
+                const price = item.latest_price 
+                    ? `$${parseFloat(item.latest_price).toFixed(2)}`
+                    : 'N/A';
+                
+                const updated = item.updated_at 
+                    ? new Date(item.updated_at).toLocaleString()
+                    : 'Never';
+                
+                card.innerHTML = `
+                    <div class="ticker-header">
+                        <div class="ticker-symbol">${item.symbol}</div>
+                        <button class="delete-btn" onclick="event.stopPropagation(); deleteFromWatchlist('${item.symbol}')">
+                            Remove
+                        </button>
+                    </div>
+                    <div class="ticker-price">${price}</div>
+                    <div class="ticker-updated">Updated: ${updated}</div>
+                `;
+                
+                container.appendChild(card);
+            });
+        }
+
+        // Delete ticker from watchlist
+        async function deleteFromWatchlist(symbol) {
+            if (!confirm(`Remove ${symbol} from watchlist?`)) return;
+            
+            try {
+                const response = await fetch(`/watchlist/${symbol}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) throw new Error('Failed to delete');
+                
+                showToast(`${symbol} removed from watchlist`);
+                loadWatchlist(); // Reload the list
+            } catch (error) {
+                console.error('Error deleting ticker:', error);
+                showToast('Failed to remove ticker', 'error');
+            }
+        }
+
+        // Show toast notification
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.style.animation = 'slideOut 0.3s ease';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
