@@ -29,10 +29,11 @@ async function loadTickerData(symbol) {
     try {
         showLoading();
         
-        // Fetch company details and metrics in parallel
-        const [detailsRes, metricsRes] = await Promise.all([
+        // Fetch company details, metrics, and top 5 news in parallel
+        const [detailsRes, metricsRes, newsRes] = await Promise.all([
             fetch(`/ticker/${symbol}/details`),
-            fetch(`/ticker/${symbol}/metrics`)
+            fetch(`/ticker/${symbol}/metrics`),
+            fetch(`/ticker/${symbol}/news?limit=5`)
         ]);
         
         if (!detailsRes.ok) {
@@ -41,6 +42,7 @@ async function loadTickerData(symbol) {
         
         const details = await detailsRes.json();
         const metrics = metricsRes.ok ? await metricsRes.json() : null;
+        const news = newsRes.ok ? await newsRes.json() : [];
         
         // Check if ticker is in watchlist
         await checkWatchlistStatus(symbol);
@@ -49,6 +51,7 @@ async function loadTickerData(symbol) {
         renderCompanyHeader(details, metrics);
         renderCompanyInfo(details);
         renderDescription(details);
+        renderNews(news);
         
         showContent();
         
@@ -327,6 +330,53 @@ function formatDate(dateString) {
     } catch (error) {
         return dateString; // Return original if parsing fails
     }
+}
+
+// Render news articles
+function renderNews(articles) {
+    const newsContainer = document.getElementById('news-container');
+    if (!newsContainer) return;
+    
+    if (!articles || articles.length === 0) {
+        newsContainer.innerHTML = '<p class="text-gray-500">No recent news available for this ticker.</p>';
+        return;
+    }
+    
+    const newsHtml = articles.map(article => {
+        const publishedDate = article.published_utc 
+            ? formatDate(article.published_utc)
+            : 'Unknown date';
+        
+        const sentiment = article.sentiment || 'neutral';
+        const sentimentClass = {
+            'positive': 'bg-green-100 text-green-800',
+            'negative': 'bg-red-100 text-red-800',
+            'neutral': 'bg-gray-100 text-gray-800'
+        }[sentiment.toLowerCase()] || 'bg-gray-100 text-gray-800';
+        
+        return `
+            <div class="news-article" style="padding: 1rem; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 1rem;">
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                    <h4 style="font-weight: 600; font-size: 1rem; margin: 0; flex: 1;">
+                        ${article.article_url 
+                            ? `<a href="${article.article_url}" target="_blank" style="color: #2563eb; text-decoration: none;">${article.title}</a>`
+                            : article.title
+                        }
+                    </h4>
+                    <span class="${sentimentClass}" style="padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 500; white-space: nowrap; margin-left: 1rem;">
+                        ${sentiment}
+                    </span>
+                </div>
+                ${article.description ? `<p style="color: #6b7280; font-size: 0.875rem; margin: 0.5rem 0;">${article.description}</p>` : ''}
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; color: #9ca3af; margin-top: 0.5rem;">
+                    <span>${article.publisher_name || 'Unknown publisher'}</span>
+                    <span>${publishedDate}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    newsContainer.innerHTML = newsHtml;
 }
 
 // Show content

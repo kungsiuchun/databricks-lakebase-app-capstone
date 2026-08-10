@@ -85,6 +85,8 @@ class StockChart {
         try {
             const days = this.getTimeframeDays(timeframe);
             console.log(`Loading chart data for ${this.symbol}, timeframe: ${timeframe}, days: ${days}`);
+            // Fetch from backend API - data comes from Lakebase price_history table (if ticker is synced)
+            // or directly from Massive API (for non-synced tickers)
             const response = await fetch(`/ticker/${this.symbol}/history?days=${days}&limit=1000`);
             
             if (!response.ok) {
@@ -122,18 +124,10 @@ class StockChart {
     }
     
     getTimeframeDays(timeframe) {
-        const now = new Date();
-        const year = now.getFullYear();
-        
         switch (timeframe) {
-            case '1D': return 1;
             case '1W': return 7;
             case '1M': return 30;
             case '3M': return 90;
-            case '1Y': return 365;
-            case 'YTD':
-                const startOfYear = new Date(year, 0, 1);
-                return Math.ceil((now - startOfYear) / (1000 * 60 * 60 * 24));
             default: return 90;
         }
     }

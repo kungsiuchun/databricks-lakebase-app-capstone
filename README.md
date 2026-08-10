@@ -1,34 +1,112 @@
-# Massive + Lakebase Databricks App Boilerplate
+# Financial Data Platform with Lakebase & Polygon.io
 
-A minimal Databricks App that:
-- Connects to **Lakebase** (Databricks-managed Postgres) using a single `LAKEBASE_URL` secret (a native Postgres role with a static password)
-- Calls the **Massive API** (large paginated dataset) using a key stored in a Databricks secret scope
-- Syncs Massive API data into Lakebase in batches
-- Exposes a small Flask API to trigger syncs and read synced records
+A production-ready Databricks application that provides comprehensive financial market data analysis using:
+- **Lakebase** (Databricks-managed Postgres with pgvector) for operational data storage
+- **Massive API** for real-time and historical market data
+- **Sentence Transformers** for semantic news embeddings
+- **Flask web application** with interactive UI for ticker analysis and portfolio tracking
+- **Automated ETL pipelines** for continuous data ingestion and processing
 
-## Files
+## Architecture Overview
 
-- `app.py` - Flask app: `/healthz`, `/records` (GET), `/sync` (POST), `/watchlist` (GET/POST/DELETE), `/news/sync` (POST)
-- `lakebase.py` - Lakebase connection helper (single `LAKEBASE_URL`, psycopg2 + SQLAlchemy)
-- `massive_client.py` - Massive API client: pagination generator for large datasets, `get_latest_price`, `get_news`
-- `setup_secrets.py` - One-time script to create the secret scopes and store the Massive API key + Lakebase URL
-- `app.yaml` - Databricks App deployment config (command + env vars)
-- `templates/index.html` - Watchlist UI (add + remove tickers)
-- `notebooks/ingest_ticker_news_embeddings.py` - Self-contained ETL notebook: reads tickers from the `watchlist` table, fetches news for those tickers directly from Massive (rate-limited to 5 requests/min for the free API tier) into `ticker_news_documents`, computes title/description embeddings into `ticker_news_embeddings`, and fetches + chunks + embeds each article's full body (via `trafilatura`) into `ticker_news_chunk_embeddings` (pgvector)
-- `databricks.yml` + `resources/ingest_ticker_news_embeddings_job.yml` - Databricks Asset Bundle config that schedules the notebook above as a Workflow (see [Scheduling the embeddings notebook](#scheduling-the-embeddings-notebook-as-a-databricks-workflow))
-- `.env.example` - Local dev env var template (copy to `.env`, do not commit real values)
+This platform combines three core components:
+
+1. **Flask Web Application** - User-facing API and web interface for:
+   - Managing watchlists (add/remove tickers)
+   - Viewing ticker details, price history, and metrics
+   - Comparing tickers against benchmark (SPY)
+   - Real-time news with semantic search capabilities
+   - Interactive charts and visualizations
+
+2. **Automated Data Pipelines** - Three notebooks scheduled as Databricks Workflows:
+   - **Price & Company Data** (`ingest_ticker_data`) - Historical OHLCV, company profiles, market metrics
+   - **News & Embeddings** (`ingest_ticker_news_embeddings`) - News articles with vector embeddings for semantic search
+   - **Technical Indicators** (`ingest_ticker_technical_indicators`) - SMA, EMA, MACD, RSI calculations
+
+3. **Lakebase Database** - Postgres with 8 core tables:
+   - `watchlist` - User ticker selections
+   - `ticker_details` - Company profiles (name, description, market cap, industry)
+   - `price_history` - Historical OHLCV data
+   - `ticker_metrics` - Current price, volume, market data
+   - `ticker_news_documents` - Raw news articles
+   - `ticker_news_embeddings` - News title/description vectors (pgvector)
+   - `ticker_news_chunk_embeddings` - Full article body chunks (for RAG)
+   - `technical_indicators` - SMA, EMA, MACD, RSI time series
+
+## Project Structure
+
+### Core Application
+- **`app.py`** - Flask web server with API endpoints:
+  - `GET /` - Main UI dashboard
+  - `GET /healthz` - Health check
+  - `GET /records?limit=100` - Read synced records
+  - `POST /sync` - Trigger data sync from Massive API
+  - `GET /watchlist` - Get user's watchlist with latest prices
+  - `POST /watchlist` - Add ticker to watchlist
+  - `DELETE /watchlist/<symbol>` - Remove ticker
+  - `POST /news/sync` - Sync news for specific tickers
+  - `GET /ticker/<symbol>` - Full ticker details page
+  - `GET /ticker/<symbol>/compare` - Compare ticker vs benchmark (SPY)
+- **`lakebase.py`** - Lakebase connection manager (psycopg2 pooling, context managers)
+- **`massive_client.py`** - Massive API client with methods:
+  - `get_ticker_details()` - Company profile
+  - `get_price_history()` - Historical OHLCV data
+  - `get_current_metrics()` - Real-time price snapshot
+  - `get_news()` - News articles with pagination
+  - `get_sma()`, `get_ema()`, `get_macd()`, `get_rsi()` - Technical indicators
+- **`setup_secrets.py`** - One-time setup script for Databricks secrets
+- **`app.yaml`** - Databricks App deployment configuration
+
+### ETL Notebooks (`notebooks/`)
+1. **`ingest_ticker_data.py`** - Comprehensive ticker data pipeline:
+   - Reads watchlist symbols from Lakebase
+   - Fetches company details, 90 days of price history, current metrics
+   - Upserts into `ticker_details`, `price_history`, `ticker_metrics`
+   - Rate-limited (5 req/min for free tier)
+
+2. **`ingest_ticker_news_embeddings.py`** - News & semantic search pipeline:
+   - Fetches news articles for watchlisted tickers
+   - Generates embeddings using `sentence-transformers/all-MiniLM-L6-v2`
+   - Creates both title/description vectors and full-article chunk vectors
+   - Stores in `ticker_news_documents`, `ticker_news_embeddings`, `ticker_news_chunk_embeddings`
+   - Enables semantic news search and RAG applications
+
+3. **`ingest_ticker_technical_indicators.py`** - Technical analysis pipeline:
+   - Computes SMA (50d, 200d), EMA (12d, 26d), MACD, RSI (14d)
+   - Stores time-series indicators in `technical_indicators` table
+   - Supports trend analysis and trading signals
+
+### Web UI (`templates/` & `static/`)
+- **`templates/index.html`** - Main dashboard with watchlist management
+- **`templates/ticker_detail.html`** - Individual ticker analysis page
+- **`static/chart.js`** - Price chart visualizations (Chart.js integration)
+
+### Database Setup (`sql/`)
+- **`01_setup_news_table.sql`** - News documents table
+- **`02_setup_embeddings_table.sql`** - Title/description embeddings (pgvector)
+- **`03_setup_chunk_embeddings_table.sql`** - Full article chunk embeddings
+- **`04_cast_arrays_to_vectors.sql`** - Convert array columns to pgvector format
+- **`05_setup_ticker_details_table.sql`** - Company profiles
+- **`06_setup_price_history_table.sql`** - Historical OHLCV data
+- **`07_setup_ticker_metrics_table.sql`** - Current market metrics
+- **`08_add_industry_columns.sql`** - Industry classification fields
+- **`09_setup_technical_indicators_table.sql`** - Technical analysis indicators
+
+### Deployment (`databricks.yml` & `resources/`)
+- **`databricks.yml`** - Declarative Automation Bundle (DAB) configuration
+- **`resources/ingest_ticker_news_embeddings_job.yml`** - Scheduled workflow definition
 
 ## Step-by-step setup
 
-### 1. Create a Massive.com account and get an API key
+### 1. Get a Massive API key
 
-1. Go to [https://massive.com](https://massive.com) and sign up for a new account (or log in if you already have one).
-2. Once logged in, open your account/workspace **Settings** (or **Developer** / **API** section, depending on Massive's current UI).
-3. Find **API Keys** and click **Create API Key** (or **Generate New Key**).
-4. Give the key a name (e.g. `databricks-app`) and copy the generated key value immediately — most providers only show it once.
-5. Keep this key handy for step 3 (Store your secrets) below. Do **not** put it in code, `.env` committed to git, or anywhere else in plaintext.
+1. Go to [https://massive.com](https://massive.com) and sign up for a free account.
+2. Navigate to your account **Settings** → **API Keys** (or **Developer** section).
+3. Click **Create API Key** or **Generate New Key**.
+4. Give it a name (e.g., `databricks-finance-app`) and copy the generated key immediately — it may only be shown once.
+5. Keep this key secure — you'll store it in Databricks secrets in step 3.
 
-> If Massive's console differs from the steps above, look for **API Keys**, **Tokens**, or **Credentials** under your account/organization settings — the key is what authenticates requests to `https://api.massive.com` in `massive_client.py`.
+> **Free Tier Limits**: 5 API requests per minute. The notebooks include rate limiting (`time.sleep(12)` between requests) to stay within quota. For production workloads, consider upgrading to a paid tier.
 
 ### 2. Create a Lakebase instance and a native-password role
 
@@ -54,20 +132,17 @@ A minimal Databricks App that:
 
 ### 3. Store your secrets
 
-Run once from a **Databricks notebook** in your workspace (no CLI needed):
+Run once from a **Databricks notebook** or terminal in your workspace:
 
-1. Create a new notebook (or open the Git folder you'll create in step 5, once it's cloned) and attach it to any running cluster.
-2. In a cell, run:
+```python
+%sh python setup_secrets.py
+```
 
-   ```python
-   %sh python setup_secrets.py
-   ```
+This securely prompts for (via `getpass` - no echoing to logs):
+- **Massive API key** → stored as `massive/api-key`
+- **Lakebase connection URL** → stored as `database/lakebase-url` (base64 encoded)
 
-   or open a terminal from the notebook (**Run** > **Open terminal**, if enabled on your cluster) and run `python setup_secrets.py` there.
-
-This prompts (via `getpass`, so nothing is echoed or written to disk/shell history) for:
-- Your **Massive API key** (from step 1) → stored as secret `massive/api-key`
-- Your **Lakebase connection URL** (from step 2) → stored as secret `database/lakebase-url`
+Both secrets are then available to the Flask app and notebooks via the Databricks secrets API.
 
 ### 4. Configure environment variables (local dev)
 
@@ -85,11 +160,20 @@ For deployment, `app.yaml` already pulls `LAKEBASE_URL` from the `database/lakeb
 pip install -r requirements.txt
 ```
 
-### 6. Run locally
+### 6. Run locally (optional - for development)
+
+For local development and testing:
 
 ```bash
 python app.py
 ```
+
+The app will start on `http://localhost:5000`. 
+
+**Note**: Local development requires:
+- Valid `.env` file with `LAKEBASE_URL`
+- Network access to your Lakebase instance
+- Massive API key in environment
 
 ### 7. Create a Git folder in Databricks and deploy the app (no CLI required)
 
@@ -115,75 +199,182 @@ All of this is done through the Databricks workspace UI:
 
 5. Once deployed, open the app's URL from the Apps UI and hit `GET /healthz` to confirm it's running, then try `POST /sync` to pull data from Massive into Lakebase.
 
-## Endpoints
+## API Endpoints
 
-- `GET /healthz` - health check
-- `GET /records?limit=100` - read synced records from Lakebase
-- `POST /sync?batch_size=500` with optional JSON body `{"path": "/records"}` - pull from Massive API and upsert into Lakebase
-- `GET /watchlist` - get the current user's watchlist symbols with last known price
-- `POST /watchlist` - add/update a symbol on the current user's watchlist
-- `DELETE /watchlist/<symbol>` - remove a symbol from the current user's watchlist
-- `POST /news/sync` with optional JSON body `{"tickers": ["AAPL", "MSFT"], "limit": 50}` - pull recent news per ticker from Massive and upsert into `ticker_news_documents`
+### Public Endpoints (Web UI)
+- **`GET /`** - Main dashboard with watchlist and ticker search
+- **`GET /ticker/<symbol>`** - Detailed ticker page (price chart, news, metrics, technical indicators)
+- **`GET /ticker/<symbol>/compare`** - Compare ticker against SPY benchmark
 
-## Scheduling the embeddings notebook as a Databricks Workflow
+### Protected Endpoints (require `X-API-Key` header)
+- **`GET /healthz`** - Health check (returns database connection status)
+- **`GET /records?limit=100`** - Read synced records from Lakebase
+- **`POST /sync`** - Trigger full data sync (details, history, metrics) for watchlisted tickers
+- **`POST /news/sync`** - Sync news articles
+  - Optional body: `{"tickers": ["AAPL", "MSFT"], "limit": 50}`
+  - Defaults to watchlisted tickers if no body provided
 
-`notebooks/ingest_ticker_news_embeddings.py` is a self-contained ETL: it reads the distinct
-tickers from the `watchlist` table, fetches news for those tickers directly from Massive
-(serially, rate-limited to `max_requests_per_minute` - 5/min by default, matching the free
-Massive API tier's strict limits), and upserts them into `ticker_news_documents`. It then turns
-those rows into vector embeddings in `ticker_news_embeddings` (title + description) and
-`ticker_news_chunk_embeddings` (chunks of the full article body, fetched from each article's
-`article_url` and extracted with `trafilatura`). You can run it on a schedule two ways — pick
-whichever fits your setup:
+### Watchlist Endpoints (Public - used by UI)
+- **`GET /watchlist`** - Get user's watchlist with latest prices
+- **`POST /watchlist`** - Add ticker to watchlist
+  - Body: `{"symbol": "AAPL"}`
+- **`DELETE /watchlist/<symbol>`** - Remove ticker from watchlist
 
-### Option A: Databricks Asset Bundle (CLI, version-controlled)
+### Authentication & Rate Limiting
+- **API Key**: Set via `API_KEYS` environment variable (comma-separated for multiple keys)
+- **Rate Limit**: 5 requests per minute on protected endpoints
+- **Default Dev Key**: `default-dev-key-change-in-production` (⚠️ CHANGE IN PRODUCTION!)
 
-This repo already includes bundle config for this: `databricks.yml` +
-`resources/ingest_ticker_news_embeddings_job.yml`. This is the recommended path if you want the
-job definition tracked in git alongside the code.
+### Example API Usage
 
-1. Set the real workspace URL in `databricks.yml` (replace `<your-workspace-instance>`).
-2. Deploy: `databricks bundle deploy -t dev`
-3. Test it once manually: `databricks bundle run ingest_ticker_news_embeddings_job -t dev`
-4. Once you've confirmed a successful run, flip `pause_status: PAUSED` to `pause_status: UNPAUSED`
-   in `resources/ingest_ticker_news_embeddings_job.yml` and redeploy to turn on the daily schedule.
+```bash
+# Add a ticker to watchlist
+curl -X POST http://localhost:5000/watchlist \
+  -H "Content-Type: application/json" \
+  -d '{"symbol": "NVDA"}'
 
-### Option B: Workflows UI (no CLI required)
+# Trigger sync (requires API key)
+curl -X POST http://localhost:5000/sync \
+  -H "X-API-Key: your-api-key-here"
 
-If you'd rather not use the CLI, you can create the equivalent job by hand in the Databricks UI:
+# Fetch news for specific tickers (requires API key)
+curl -X POST http://localhost:5000/news/sync \
+  -H "X-API-Key: your-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{"tickers": ["AAPL", "TSLA"], "limit": 100}'
+```
 
-1. **Get the notebook into your workspace**: if you already created a Git folder for this repo
-   (see step 7 above), the notebook is already there at `notebooks/ingest_ticker_news_embeddings.py`.
-   Otherwise, upload/import it via **Workspace** > **Create** > **Notebook** > **Import**.
-2. **Create the job**: go to **Workflows** (left sidebar) > **Jobs** > **Create Job**.
-3. **Add a task**:
-   - Task type: **Notebook**.
-   - Notebook path: browse to `notebooks/ingest_ticker_news_embeddings.py` in your Git folder.
-   - Cluster: choose **New job cluster** (a small general-purpose cluster is enough) or an existing
-     cluster/serverless, if available.
-   - Under **Parameters**, add the same widget values the notebook expects:
-     - `watchlist_table_name` = `watchlist`
-     - `news_table_name` = `ticker_news_documents`
-     - `embeddings_table_name` = `ticker_news_embeddings`
-     - `chunk_embeddings_table_name` = `ticker_news_chunk_embeddings`
-     - `embedding_model` = `sentence-transformers/all-MiniLM-L6-v2`
-     - `massive_secret_scope` = `massive`
-     - `massive_secret_key` = `api-key`
-     - `massive_api_base_url` = `https://api.massive.com`
-     - `news_fetch_limit` = `50`
-     - `max_requests_per_minute` = `5`
-     - `chunk_size` = `800`
-     - `chunk_overlap` = `100`
-4. **Add a schedule**: click **Add trigger** on the job, choose **Scheduled**, and set it to run
-   daily (e.g. 6:00 AM UTC) using either the simple picker or a cron expression
-   (`0 0 6 * * ?`, timezone UTC).
-5. **Add a failure notification**: under **Notifications**, add your email/Slack webhook for
-   on-failure alerts.
-6. Click **Create** and optionally **Run now** to validate the job before its first scheduled run.
+## Scheduling ETL Pipelines as Databricks Workflows
 
-Both options produce the same result — a Databricks Workflow that runs the notebook and refreshes
-`ticker_news_embeddings`. The Asset Bundle keeps the definition in git and reproducible across
-workspaces; the UI path is quicker for a one-off class demo but isn't tracked in version control.
+All three notebooks can be scheduled as Databricks Workflows to keep your data fresh. Each is self-contained with configurable widgets for parameters.
+
+### Pipeline 1: Ticker Data Ingestion
+**Notebook**: `notebooks/ingest_ticker_data.py`  
+**Purpose**: Sync company details, price history (90 days), and current market metrics  
+**Recommended Schedule**: Daily at 6:00 PM ET (after market close)  
+**Output Tables**: `ticker_details`, `price_history`, `ticker_metrics`
+
+### Pipeline 2: News & Embeddings
+**Notebook**: `notebooks/ingest_ticker_news_embeddings.py`  
+**Purpose**: Fetch news articles, generate semantic embeddings for search  
+**Recommended Schedule**: Every 4 hours  
+**Output Tables**: `ticker_news_documents`, `ticker_news_embeddings`, `ticker_news_chunk_embeddings`
+
+### Pipeline 3: Technical Indicators
+**Notebook**: `notebooks/ingest_ticker_technical_indicators.py`  
+**Purpose**: Calculate SMA, EMA, MACD, RSI for trend analysis  
+**Recommended Schedule**: Daily at 6:30 PM ET (after price data sync)  
+**Output Tables**: `technical_indicators`
+
+---
+
+You can schedule these two ways — pick whichever fits your workflow:
+
+### Option A: Declarative Automation Bundle (DAB) - Recommended
+
+**Benefits**: Version-controlled, reproducible across workspaces, CI/CD-friendly
+
+This repo includes a starter DAB config for the news pipeline (`databricks.yml` + `resources/ingest_ticker_news_embeddings_job.yml`). Extend it for the other two notebooks:
+
+1. **Update workspace URL** in `databricks.yml`:
+   ```yaml
+   workspace:
+     host: https://your-workspace.cloud.databricks.com
+   ```
+
+2. **Deploy the bundle**:
+   ```bash
+   databricks bundle deploy -t dev
+   ```
+
+3. **Test the job manually**:
+   ```bash
+   databricks bundle run ingest_ticker_news_embeddings_job -t dev
+   ```
+
+4. **Enable the schedule**: Once validated, edit `resources/ingest_ticker_news_embeddings_job.yml`:
+   ```yaml
+   pause_status: UNPAUSED  # Change from PAUSED
+   ```
+   Then redeploy: `databricks bundle deploy -t dev`
+
+5. **Add jobs for the other notebooks**: Copy the YAML template and adjust:
+   - `resources/ingest_ticker_data_job.yml` - Schedule for daily 6:00 PM ET
+   - `resources/ingest_technical_indicators_job.yml` - Schedule for daily 6:30 PM ET
+
+**Pro Tip**: Use DAB for production deployments. It supports multiple environments (dev/staging/prod) and integrates with Git workflows.
+
+### Option B: Workflows UI (Quick Start - No CLI)
+
+Create jobs directly in the Databricks UI. Repeat these steps for each of the three notebooks:
+
+#### General Steps (apply to all three notebooks):
+
+1. **Navigate**: **Workflows** (sidebar) → **Jobs** → **Create Job**
+
+2. **Task Configuration**:
+   - **Task type**: Notebook
+   - **Notebook path**: Browse to `notebooks/<notebook_name>.py`
+   - **Cluster**: 
+     - **Recommended**: New job cluster (1-2 workers, latest DBR/MLR)
+     - **Alternative**: Serverless (if available in your workspace)
+
+3. **Schedule**: Click **Add trigger** → **Scheduled**
+
+4. **Notifications**: Add email for on-failure alerts
+
+5. **Test**: Click **Run now** before enabling the schedule
+
+---
+
+#### Job 1: Ticker Data Ingestion
+**Notebook**: `notebooks/ingest_ticker_data.py`  
+**Schedule**: Daily at 6:00 PM ET (`0 0 18 * * ? America/New_York`)  
+**Parameters** (click **Add** under Parameters):
+- `watchlist_table_name` = `watchlist`
+- `details_table_name` = `ticker_details`
+- `history_table_name` = `price_history`
+- `metrics_table_name` = `ticker_metrics`
+- `massive_secret_scope` = `massive`
+- `massive_secret_key` = `api-key`
+- `massive_api_base_url` = `https://api.polygon.io`
+- `history_days` = `90`
+- `rate_limit_delay_seconds` = `12`
+
+#### Job 2: News & Embeddings
+**Notebook**: `notebooks/ingest_ticker_news_embeddings.py`  
+**Schedule**: Every 4 hours (`0 0 */4 * * ?`)  
+**Parameters**:
+- `watchlist_table_name` = `watchlist`
+- `news_table_name` = `ticker_news_documents`
+- `embeddings_table_name` = `ticker_news_embeddings`
+- `chunk_embeddings_table_name` = `ticker_news_chunk_embeddings`
+- `embedding_model` = `sentence-transformers/all-MiniLM-L6-v2`
+- `massive_secret_scope` = `massive`
+- `massive_secret_key` = `api-key`
+- `massive_api_base_url` = `https://api.polygon.io`
+- `news_fetch_limit` = `50`
+- `max_requests_per_minute` = `5`
+- `chunk_size` = `800`
+- `chunk_overlap` = `100`
+
+#### Job 3: Technical Indicators
+**Notebook**: `notebooks/ingest_ticker_technical_indicators.py`  
+**Schedule**: Daily at 6:30 PM ET (`0 30 18 * * ? America/New_York`)  
+**Parameters**:
+- `watchlist_table_name` = `watchlist`
+- `indicators_table_name` = `technical_indicators`
+- `massive_secret_scope` = `massive`
+- `massive_secret_key` = `api-key`
+- `massive_api_base_url` = `https://api.polygon.io`
+- `max_requests_per_minute` = `5`
+- `data_limit_per_indicator` = `100`
+
+---
+
+**When to use each approach**:
+- **DAB (Option A)**: Production deployments, multi-environment (dev/staging/prod), CI/CD pipelines
+- **UI (Option B)**: Quick prototyping, demos, personal projects
 
 ## Enabling Change Data Feed (CDF) for Postgres tables
 
@@ -240,10 +431,74 @@ history.
 > within an enabled schema; the only way to keep a table out of the feed is to not set
 > `REPLICA IDENTITY FULL` on it.
 
-## Notes
+## Key Features
 
-- Lakebase auth uses a single `LAKEBASE_URL` secret pointing at a native Postgres role with a
-  static, non-expiring password — no token refresh logic needed in `lakebase.py`.
-- The Massive API pagination in `massive_client.py` assumes a `{"items": [...], "next_cursor": ...}`
-  cursor-based shape. Adjust `paginated_get` to match the real API's pagination contract.
-- For very large batch upserts, consider `psycopg2.extras.execute_values` instead of per-row inserts.
+### 1. Real-Time Market Data
+- **Price History**: 90 days of OHLCV data per ticker
+- **Company Profiles**: Name, description, market cap, industry, employee count
+- **Current Metrics**: Real-time price, volume, daily change, market cap
+- **Benchmark Comparison**: Compare any ticker against SPY (S&P 500)
+
+### 2. Semantic News Search
+- **Vector Embeddings**: News titles and descriptions embedded using Sentence Transformers
+- **Full-Text RAG**: Article bodies chunked and embedded for retrieval-augmented generation
+- **pgvector Integration**: Native Postgres vector similarity search
+- **Use Cases**: 
+  - "Show me recent news similar to this article"
+  - "What are investors saying about AI?"
+  - Build chatbots that cite recent market news
+
+### 3. Technical Analysis
+- **Moving Averages**: SMA (50d, 200d), EMA (12d, 26d)
+- **Momentum Indicators**: MACD (12/26/9), RSI (14d)
+- **Trend Signals**: Golden cross, death cross, overbought/oversold
+- **Time Series Storage**: Historical indicator values for backtesting
+
+### 4. Security & Production-Ready
+- **API Key Authentication**: Protect sync endpoints from unauthorized access
+- **Rate Limiting**: 5 req/min on protected routes (in-memory, upgrade to Redis for multi-instance)
+- **Connection Pooling**: Efficient Lakebase connection management via `psycopg2.pool`
+- **Error Handling**: Comprehensive logging and graceful fallbacks
+- **Environment-Based Config**: Separate dev/prod configurations via `databricks.yml`
+
+### 5. Change Data Capture (CDF)
+Lakebase supports streaming row-level changes from Postgres to Unity Catalog Delta tables. See [Enabling CDF](#enabling-change-data-feed-cdf-for-postgres-tables) below for setup.
+
+---
+
+## Technical Notes
+
+### Authentication
+- **Lakebase**: Single `LAKEBASE_URL` secret with native Postgres role (static password, no rotation needed)
+- **Massive API**: API key stored in `massive/api-key` secret (base64 encoded)
+- **Databricks**: Secrets fetched via `WorkspaceClient().secrets.get_secret()`
+
+### Rate Limiting
+- **Massive API Free Tier**: 5 API calls per minute (enforced in notebooks via `time.sleep(12)`)
+- **Flask App**: In-memory rate limiter (5 req/min per API key/IP)
+- **Production Upgrade**: Replace in-memory store with Redis for distributed rate limiting
+
+### Performance Optimization
+- **Batch Upserts**: Use `psycopg2.extras.execute_values()` for bulk inserts (100x faster than row-by-row)
+- **Connection Pooling**: `lakebase.py` uses `psycopg2.pool.SimpleConnectionPool` (min=1, max=10)
+- **Async Embeddings**: Consider `sentence-transformers` batching for faster embedding generation
+- **Indexes**: Automatic indexes on ticker symbols, dates, and vector columns
+
+### Extending the Platform
+
+**Add new data sources**:
+1. Add methods to `massive_client.py` (e.g., `get_options_data()`, `get_crypto_prices()`)
+2. Create corresponding tables in `sql/`
+3. Build a new notebook in `notebooks/` to ingest the data
+4. Schedule as a Databricks Workflow
+
+**Add new analysis endpoints**:
+1. Define routes in `app.py` (e.g., `@app.route("/ticker/<symbol>/options")`)
+2. Query Lakebase via `lakebase.run_query()`
+3. Render in HTML template or return JSON
+
+**Build a RAG chatbot**:
+1. Use `ticker_news_chunk_embeddings` for semantic search
+2. Query: `SELECT * FROM ticker_news_chunk_embeddings ORDER BY embedding <=> %s LIMIT 5`
+3. Pass retrieved chunks to an LLM (OpenAI, Anthropic, Databricks Foundation Models)
+4. Cite sources using `article_url` and `published_utc`

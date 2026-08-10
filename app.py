@@ -142,7 +142,6 @@ def rate_limit(f):
     return decorated_function
 
 
-TABLE_NAME = os.environ.get("MASSIVE_TABLE_NAME", "massive_records")
 WATCHLIST_TABLE_NAME = os.environ.get("WATCHLIST_TABLE_NAME", "watchlist")
 NEWS_TABLE_NAME = os.environ.get("NEWS_TABLE_NAME", "ticker_news_documents")
 TICKER_DETAILS_TABLE = os.environ.get("TICKER_DETAILS_TABLE", "ticker_details")
@@ -164,18 +163,6 @@ DEFAULT_NEWS_TICKERS = [
 # malformed input before we even call the Massive API.
 _TICKER_RE = re.compile(r"^[A-Z]{1,10}(\.[A-Z]{1,2})?$")
 
-
-def ensure_table():
-    """Create the destination table in Lakebase if it doesn't exist yet."""
-    lakebase.run_write(
-        f"""
-        CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-            id TEXT PRIMARY KEY,
-            payload JSONB NOT NULL,
-            synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        )
-        """
-    )
 
 
 def ensure_watchlist_table():
@@ -697,20 +684,18 @@ def get_watchlist():
 @app.route("/watchlist", methods=["POST"])
 def add_to_watchlist():
     """
-    Add a ticker to the watchlist with IMMEDIATE data fetch (Hybrid Flow):
-    1. Fetch latest price from Polygon API
-    2. Fetch company details and store in ticker_details
-    3. Fetch last 90 days of price history and store in price_history
-    4. Calculate and store current metrics in ticker_metrics
-    5. Add to watchlist table
+    Add a ticker to the watchlist (no data sync).
     
-    This ensures the user sees charts and company info immediately.
-    Daily batch jobs will keep the data updated after initial fetch.
+    This just adds the symbol to the watchlist table with the current price.
+    The ticker detail page loads all data (details, metrics, history, news) 
+    on-demand from either the database (if previously synced) or directly 
+    from the Polygon API (no save).
+    
+    Flow:
+    1. Validate ticker exists by fetching latest price from Polygon API
+    2. Add to watchlist table with that price
     """
     ensure_watchlist_table()
-    ensure_ticker_details_table()
-    ensure_price_history_table()
-    ensure_ticker_metrics_table()
 
     if request.is_json:
         symbol = request.json.get("symbol", "")
@@ -734,20 +719,7 @@ def add_to_watchlist():
     if price is None:
         return jsonify({"error": f"No price data available for ticker: {symbol}"}), 400
 
-    # Step 2: Fetch and store company details (name, logo, description, etc.)
-    logger.info(f"Fetching ticker details for {symbol}...")
-    details = _sync_ticker_details(client, symbol)
-    
-    # Step 3: Fetch and store 90 days of price history (for charts)
-    logger.info(f"Fetching price history for {symbol}...")
-    history_count = _sync_price_history(client, symbol, days=90)
-    
-    # Step 4: Calculate and store current metrics
-    if history_count > 0:
-        logger.info(f"Calculating metrics for {symbol}...")
-        _calculate_and_store_metrics(symbol)
-    
-    # Step 5: Add to watchlist
+    # Add to watchlist (no data sync)
     email = _current_user_email()
     lakebase.run_write(
         f"""
@@ -764,9 +736,7 @@ def add_to_watchlist():
         "symbol": symbol,
         "email": email,
         "latest_price": price,
-        "details_synced": details is not None,
-        "history_records": history_count,
-        "message": f"Added {symbol} to watchlist with full data sync"
+        "message": f"Added {symbol} to watchlist"
     })
 
 
@@ -977,9 +947,14 @@ def get_ticker_metrics(symbol: str):
     # Not in database - fetch from Polygon API
     try:
         client = MassiveClient()
-        api_data = client.get_latest_price(symbol)
         
-        if not api_data or not api_data.get("results"):
+        # Get last 7 days of price history to ensure we have at least 2 trading days
+        from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        to_date = datetime.now().strftime("%Y-%m-%d")
+        
+        history = client.get_price_history(symbol, from_date, to_date, timespan="day")
+        
+        if not history or len(history) < 2:
             # No data available - return null metrics
             return jsonify({
                 "symbol": symbol,
@@ -994,15 +969,13 @@ def get_ticker_metrics(symbol: str):
                 "market_cap": None
             })
         
-        results = api_data.get("results", [])
-        if isinstance(results, list) and len(results) > 0:
-            result = results[0]
-        else:
-            result = results if isinstance(results, dict) else {}
+        # Get most recent day (today) and previous trading day
+        latest = history[-1]
+        previous = history[-2]
         
         # Extract metrics from API response
-        close = float(result.get("c", 0)) if result.get("c") else None
-        prev_close = float(result.get("pc", close or 0)) if result.get("pc") else close
+        close = float(latest.get("c", 0)) if latest.get("c") else None
+        prev_close = float(previous.get("c", 0)) if previous.get("c") else None
         
         # Calculate change
         if close and prev_close:
@@ -1018,11 +991,11 @@ def get_ticker_metrics(symbol: str):
             "prev_close": prev_close,
             "price_change": price_change,
             "price_change_pct": price_change_pct,
-            "day_open": float(result.get("o", 0)) if result.get("o") else None,
-            "day_high": float(result.get("h", 0)) if result.get("h") else None,
-            "day_low": float(result.get("l", 0)) if result.get("l") else None,
-            "volume": int(result.get("v", 0)) if result.get("v") else None,
-            "market_cap": None  # Not available in previous close endpoint
+            "day_open": float(latest.get("o", 0)) if latest.get("o") else None,
+            "day_high": float(latest.get("h", 0)) if latest.get("h") else None,
+            "day_low": float(latest.get("l", 0)) if latest.get("l") else None,
+            "volume": int(latest.get("v", 0)) if latest.get("v") else None,
+            "market_cap": None  # Not available in price history endpoint
         }
         
         return jsonify(metrics)

@@ -460,12 +460,12 @@ import pandas as pd
 from sentence_transformers import SentenceTransformer
 
 # Set up HuggingFace cache
-os.environ["HF_HOME"] = "/tmp/.cache/huggingface"
-os.environ["TRANSFORMERS_CACHE"] = "/tmp/.cache/huggingface"
-os.environ["HF_HUB_CACHE"] = "/tmp/.cache/huggingface"
+os.environ["HF_HOME"] = "/tmp/huggingface"
+os.environ["TRANSFORMERS_CACHE"] = "/tmp/huggingface"
+os.environ["HF_HUB_CACHE"] = "/tmp/huggingface"
 
 print(f"Loading embedding model {EMBEDDING_MODEL_NAME}...")
-model = SentenceTransformer(EMBEDDING_MODEL_NAME, cache_folder="/tmp/.cache/huggingface")
+model = SentenceTransformer(EMBEDDING_MODEL_NAME, cache_folder="/tmp/huggingface")
 
 # Compute embeddings in batches for memory efficiency
 print("Computing embeddings...")
@@ -595,150 +595,6 @@ else:
 # MAGIC links/etc.), and splits it into overlapping chunks so each chunk can be
 # MAGIC embedded and retrieved independently. Any URL that fails to fetch/extract
 # MAGIC (paywall, timeout, dead link) is skipped rather than failing the whole job.
-
-# COMMAND ----------
-
-# DBTITLE 1,Initialize All Flask App Database Tables
-# import psycopg2
-
-# print("🔧 Initializing all database tables for Flask app...\n")
-
-# # Connect using the same credentials from the secret
-# conn = psycopg2.connect(
-#     host=db_host,
-#     port=db_port,
-#     dbname=db_name,
-#     user=db_user,
-#     password=db_password,
-#     sslmode='require'
-# )
-
-# try:
-#     cursor = conn.cursor()
-    
-#     # 1. Create watchlist table
-#     print("1/5 Creating watchlist table...")
-#     cursor.execute("""
-#         CREATE TABLE IF NOT EXISTS watchlist (
-#             symbol TEXT NOT NULL,
-#             email TEXT NOT NULL,
-#             latest_price NUMERIC,
-#             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-#             PRIMARY KEY (symbol, email)
-#         )
-#     """)
-#     cursor.execute("GRANT ALL ON TABLE watchlist TO PUBLIC")
-#     print("✅ watchlist")
-    
-#     # 2. Create ticker_news_documents table
-#     print("2/5 Creating ticker_news_documents table...")
-#     cursor.execute("""
-#         CREATE TABLE IF NOT EXISTS ticker_news_documents (
-#             id TEXT PRIMARY KEY,
-#             ticker TEXT NOT NULL,
-#             title TEXT NOT NULL,
-#             description TEXT,
-#             author TEXT,
-#             article_url TEXT,
-#             publisher_name TEXT,
-#             keywords JSONB,
-#             sentiment TEXT,
-#             sentiment_reasoning TEXT,
-#             published_utc TIMESTAMPTZ,
-#             payload JSONB NOT NULL,
-#             synced_at TIMESTAMPTZ NOT NULL DEFAULT now()
-#         )
-#     """)
-#     cursor.execute("CREATE INDEX IF NOT EXISTS idx_ticker_news_documents_ticker ON ticker_news_documents (ticker)")
-#     cursor.execute("GRANT ALL ON TABLE ticker_news_documents TO PUBLIC")
-#     print("✅ ticker_news_documents")
-    
-#     # 3. Create ticker_details table
-#     print("3/5 Creating ticker_details table...")
-#     cursor.execute("""
-#         CREATE TABLE IF NOT EXISTS ticker_details (
-#             symbol VARCHAR(10) PRIMARY KEY,
-#             name VARCHAR(255),
-#             description TEXT,
-#             market VARCHAR(50),
-#             locale VARCHAR(10),
-#             primary_exchange VARCHAR(50),
-#             type VARCHAR(50),
-#             active BOOLEAN DEFAULT TRUE,
-#             currency_name VARCHAR(50),
-#             market_cap BIGINT,
-#             homepage_url TEXT,
-#             total_employees INTEGER,
-#             list_date DATE,
-#             sic_code VARCHAR(10),
-#             sic_description VARCHAR(255),
-#             logo_url TEXT,
-#             icon_url TEXT,
-#             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-#             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-#         )
-#     """)
-#     cursor.execute("GRANT ALL ON TABLE ticker_details TO PUBLIC")
-#     print("✅ ticker_details")
-    
-#     # 4. Create price_history table
-#     print("4/5 Creating price_history table...")
-#     cursor.execute("""
-#         CREATE TABLE IF NOT EXISTS price_history (
-#             symbol VARCHAR(10) NOT NULL,
-#             date DATE NOT NULL,
-#             open NUMERIC(12, 4),
-#             high NUMERIC(12, 4),
-#             low NUMERIC(12, 4),
-#             close NUMERIC(12, 4),
-#             volume BIGINT,
-#             vwap NUMERIC(12, 4),
-#             transactions INTEGER,
-#             timestamp_ms BIGINT,
-#             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-#             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-#             PRIMARY KEY (symbol, date)
-#         )
-#     """)
-#     cursor.execute("CREATE INDEX IF NOT EXISTS idx_price_history_symbol_date ON price_history (symbol, date DESC)")
-#     cursor.execute("GRANT ALL ON TABLE price_history TO PUBLIC")
-#     print("✅ price_history")
-    
-#     # 5. Create ticker_metrics table
-#     print("5/5 Creating ticker_metrics table...")
-#     cursor.execute("""
-#         CREATE TABLE IF NOT EXISTS ticker_metrics (
-#             symbol VARCHAR(10) PRIMARY KEY,
-#             last_price NUMERIC(12, 4),
-#             prev_close NUMERIC(12, 4),
-#             price_change NUMERIC(12, 4),
-#             price_change_pct NUMERIC(8, 4),
-#             day_open NUMERIC(12, 4),
-#             day_high NUMERIC(12, 4),
-#             day_low NUMERIC(12, 4),
-#             volume BIGINT,
-#             market_cap BIGINT,
-#             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-#             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-#         )
-#     """)
-#     cursor.execute("GRANT ALL ON TABLE ticker_metrics TO PUBLIC")
-#     print("✅ ticker_metrics")
-    
-#     conn.commit()
-#     print("\n🎉 All database tables initialized successfully!")
-#     print("\nTables created:")
-#     print("  1. watchlist - User's tracked stocks")
-#     print("  2. ticker_news_documents - News articles with sentiment")
-#     print("  3. ticker_details - Company information")
-#     print("  4. price_history - Historical OHLCV data")
-#     print("  5. ticker_metrics - Current price metrics")
-#     print("\n✅ All tables have PUBLIC permissions granted")
-#     print("\nYou can now restart your Flask app!")
-    
-# finally:
-#     cursor.close()
-#     conn.close()
 
 # COMMAND ----------
 

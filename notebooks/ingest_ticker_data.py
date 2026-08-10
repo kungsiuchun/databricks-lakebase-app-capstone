@@ -43,7 +43,7 @@ dbutils.widgets.text("massive_secret_scope", "massive", "Massive API secret scop
 dbutils.widgets.text("massive_secret_key", "api-key", "Massive API secret key")
 dbutils.widgets.text("massive_api_base_url", "https://api.massive.com", "Massive API base URL")
 dbutils.widgets.text("rate_limit_delay", "12", "Delay between API calls (seconds)")
-dbutils.widgets.text("days_of_history", "365", "Days of price history to fetch")
+dbutils.widgets.text("days_of_history", "30", "Days of price history to fetch")
 
 # Read widget values
 WATCHLIST_TABLE_NAME = dbutils.widgets.get("watchlist_table_name")
@@ -215,7 +215,11 @@ def fetch_ticker_details(symbol: str, api_key: str) -> dict:
 
 
 def fetch_price_history(symbol: str, api_key: str, days: int = 30) -> list[dict]:
-    """Fetch historical OHLCV data from Massive API"""
+    """Fetch historical OHLCV data from Massive API
+    
+    Returns: List of daily price bars (OHLCV data)
+    Note: Massive API may return status='DELAYED' for free tier data
+    """
     to_date = datetime.now().strftime("%Y-%m-%d")
     from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     
@@ -227,7 +231,8 @@ def fetch_price_history(symbol: str, api_key: str, days: int = 30) -> list[dict]
         resp.raise_for_status()
         data = resp.json()
         
-        if data.get("status") == "OK" and "results" in data:
+        # Accept both "OK" and "DELAYED" status (free tier returns DELAYED)
+        if "results" in data and data.get("results"):
             history = []
             for bar in data["results"]:
                 history.append({
@@ -243,14 +248,17 @@ def fetch_price_history(symbol: str, api_key: str, days: int = 30) -> list[dict]
                     "timestamp_ms": bar.get("t")
                 })
             return history
+        else:
+            print(f"  ⚠️  No results in response for {symbol} (status: {data.get('status')})")  
+            return []
     except Exception as e:
-        print(f"  ⚠️  Failed to fetch price history for {symbol}: {e}")
+        print(f"  ❌ Failed to fetch price history for {symbol}: {e}")
         return []
 
 
 def fetch_ticker_metrics(symbol: str, api_key: str) -> dict:
-    """Fetch current snapshot/metrics from Massive API"""
-    url = f"{MASSIVE_API_BASE_URL}/v2/snapshot/locale/us/markets/stocks/tickers/{symbol}"
+    """Fetch latest price data from Massive API (previous day's aggregate)"""
+    url = f"{MASSIVE_API_BASE_URL}/v2/aggs/ticker/{symbol}/prev"
     headers = {"Authorization": f"Bearer {api_key}"}
     
     try:
@@ -258,19 +266,16 @@ def fetch_ticker_metrics(symbol: str, api_key: str) -> dict:
         resp.raise_for_status()
         data = resp.json()
         
-        if data.get("status") == "OK" and "ticker" in data:
-            ticker = data["ticker"]
-            day = ticker.get("day", {})
-            prev_day = ticker.get("prevDay", {})
+        if data.get("status") == "OK" and "results" in data and len(data["results"]) > 0:
+            result = data["results"][0]
             
-            last_price = day.get("c") or ticker.get("lastTrade", {}).get("p")
-            prev_close = prev_day.get("c")
+            last_price = result.get("c")
+            prev_close = result.get("c")  # This IS the previous close
+            day_open = result.get("o")
             
+            # Calculate change (will need historical data for accurate prev_close)
             price_change = None
             price_change_pct = None
-            if last_price and prev_close:
-                price_change = last_price - prev_close
-                price_change_pct = (price_change / prev_close) * 100
             
             return {
                 "symbol": symbol,
@@ -278,11 +283,11 @@ def fetch_ticker_metrics(symbol: str, api_key: str) -> dict:
                 "prev_close": prev_close,
                 "price_change": price_change,
                 "price_change_pct": price_change_pct,
-                "day_open": day.get("o"),
-                "day_high": day.get("h"),
-                "day_low": day.get("l"),
-                "volume": day.get("v"),
-                "market_cap": ticker.get("market_cap")
+                "day_open": day_open,
+                "day_high": result.get("h"),
+                "day_low": result.get("l"),
+                "volume": result.get("v"),
+                "market_cap": None  # Not available in this endpoint
             }
     except Exception as e:
         print(f"  ⚠️  Failed to fetch metrics for {symbol}: {e}")

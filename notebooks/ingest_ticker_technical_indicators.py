@@ -194,14 +194,15 @@ print(f"Found {len(tickers)} distinct watchlisted tickers: {tickers}")
 # DBTITLE 1,Fetch technical indicators from Massive API
 import time
 from datetime import datetime
+import os
 
-def get_massive_api_key() -> str:
-    secret = w.secrets.get_secret(scope=MASSIVE_SECRET_SCOPE, key=MASSIVE_SECRET_KEY)
-    return base64.b64decode(secret.value).decode("utf-8")
+# Set environment variables for MassiveClient
+os.environ["MASSIVE_SECRET_SCOPE"] = MASSIVE_SECRET_SCOPE
+os.environ["MASSIVE_SECRET_KEY"] = MASSIVE_SECRET_KEY
+os.environ["MASSIVE_API_BASE_URL"] = MASSIVE_API_BASE_URL
 
-# Initialize Massive client
-massive_api_key = get_massive_api_key()
-client = MassiveClient(api_key=massive_api_key, base_url=MASSIVE_API_BASE_URL)
+# Initialize Massive client (it fetches API key from secrets automatically)
+client = MassiveClient()
 
 print(f"Fetching technical indicators for {len(tickers)} tickers...")
 print(f"Rate limit: {MAX_REQUESTS_PER_MINUTE} requests/minute")
@@ -255,7 +256,8 @@ for ticker_idx, ticker in enumerate(tickers):
                         row["signal_window"] = metadata["signal_window"]
                         row["signal"] = item.get("signal")
                         row["histogram"] = item.get("histogram")
-                        row["window_size"] = None
+                        # Use short_window as window_size for MACD (required by PRIMARY KEY)
+                        row["window_size"] = metadata["short_window"]
                     else:
                         row["window_size"] = metadata.get("window_size")
                         row["short_window"] = None

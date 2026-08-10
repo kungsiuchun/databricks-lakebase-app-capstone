@@ -1,0 +1,5 @@
+fastmcp
+psycopg2-binary
+databricks-sdk
+sqlalchemy
+sentence-transformers
