@@ -1,10 +1,11 @@
-# Financial Data Platform with Lakebase & Polygon.io
+# Financial Data Platform with Lakebase & MCP Agent
 
 A production-ready Databricks application that provides comprehensive financial market data analysis using:
 - **Lakebase** (Databricks-managed Postgres with pgvector) for operational data storage
-- **Massive API** for real-time and historical market data
+- **MASSIVE API** (https://api.massive.io) for real-time and historical market data
 - **Sentence Transformers** for semantic news embeddings
 - **Flask web application** with interactive UI for ticker analysis and portfolio tracking
+- **MCP Agent** for AI-powered stock research with vector search, news analysis, and persistent research notes
 - **Automated ETL pipelines** for continuous data ingestion and processing
 
 ## Architecture Overview
@@ -23,15 +24,18 @@ This platform combines three core components:
    - **News & Embeddings** (`ingest_ticker_news_embeddings`) - News articles with vector embeddings for semantic search
    - **Technical Indicators** (`ingest_ticker_technical_indicators`) - SMA, EMA, MACD, RSI calculations
 
-3. **Lakebase Database** - Postgres with 8 core tables:
+3. **Lakebase Database** - Postgres with 11 core tables:
    - `watchlist` - User ticker selections
    - `ticker_details` - Company profiles (name, description, market cap, industry)
-   - `price_history` - Historical OHLCV data
+   - `price_history` - Historical OHLCV data (symbol, date, timespan composite PK)
    - `ticker_metrics` - Current price, volume, market data
    - `ticker_news_documents` - Raw news articles
    - `ticker_news_embeddings` - News title/description vectors (pgvector)
    - `ticker_news_chunk_embeddings` - Full article body chunks (for RAG)
    - `technical_indicators` - SMA, EMA, MACD, RSI time series
+   - `research_notes` - AI agent research insights with sources and metadata
+   - `price_alerts` - Alert rules with trigger conditions and notification settings
+   - `user_activity` - Audit trail of user and agent actions
 
 ## Project Structure
 
@@ -87,14 +91,34 @@ This platform combines three core components:
 - **`03_setup_chunk_embeddings_table.sql`** - Full article chunk embeddings
 - **`04_cast_arrays_to_vectors.sql`** - Convert array columns to pgvector format
 - **`05_setup_ticker_details_table.sql`** - Company profiles
-- **`06_setup_price_history_table.sql`** - Historical OHLCV data
+- **`06_setup_price_history_table.sql`** - Historical OHLCV data (with timespan PK)
 - **`07_setup_ticker_metrics_table.sql`** - Current market metrics
 - **`08_add_industry_columns.sql`** - Industry classification fields
 - **`09_setup_technical_indicators_table.sql`** - Technical analysis indicators
+- **`10_setup_research_notes_table.sql`** - AI agent research insights (for MCP agent)
+- **`11_setup_price_alerts_table.sql`** - Price alert rules (for MCP agent)
+- **`12_setup_user_activity_table.sql`** - Activity tracking and audit logs (for MCP agent)
 
 ### Deployment (`databricks.yml` & `resources/`)
 - **`databricks.yml`** - Declarative Automation Bundle (DAB) configuration
 - **`resources/ingest_ticker_news_embeddings_job.yml`** - Scheduled workflow definition
+
+### MCP Agent (`mcp_server/` & `AGENT_DEMO.md`)
+- **`mcp_server/massive_mcp_server.py`** - MCP server exposing AI agent tools:
+  - `vector_search` - Semantic search over news and technical embeddings
+  - `get_news` - Fetch recent news with sentiment analysis
+  - `get_ticker_details` - Company profile and fundamentals
+  - `save_research_note` - Persist agent insights to `research_notes` table
+  - `add_to_watchlist` - Add stocks to user's tracking list
+  - `get_price_history` - Historical OHLCV data retrieval
+- **`mcp_server/AGENT_SYSTEM_PROMPT.md`** - System prompt and agent behavior guidelines
+- **`AGENT_DEMO.md`** - Full demo transcript showing:
+  - End-to-end agent workflow (vector search → news → research note → watchlist)
+  - Multi-tool orchestration with clear reasoning
+  - Source citations and transparent decision-making
+  - Agent configuration and deployment steps
+
+> **See `AGENT_DEMO.md`** for detailed examples of the agent in action, including comparative stock analysis, sentiment tracking, and research note creation with full source attribution.
 
 ## Step-by-step setup
 
@@ -244,6 +268,116 @@ curl -X POST http://localhost:5000/news/sync \
   -d '{"tickers": ["AAPL", "TSLA"], "limit": 100}'
 ```
 
+## Semantic Search (BETA)
+
+The app includes an **AI-powered semantic search** feature that searches across company data, news articles, technical indicators, and price patterns using vector embeddings.
+
+### Access
+- **Web UI**: `GET /search` - Interactive search interface
+- **API**: `POST /api/semantic_search` - JSON endpoint for programmatic access
+- **Diagnostics**: `GET /api/semantic_search/test` - Health check for all dependencies
+
+### Requirements
+
+Semantic search depends on several components that must be set up first:
+
+1. **pgvector extension** in Lakebase:
+   ```sql
+   CREATE EXTENSION IF NOT EXISTS vector;
+   ```
+
+2. **Embedding tables** must be populated by running these notebooks:
+   - `notebooks/ingest_ticker_news_embeddings.py` → creates `ticker_news_embeddings`
+   - `notebooks/ingest_price_pattern_embeddings.py` → creates `ticker_price_embeddings`
+   - `notebooks/ingest_ticker_technical_indicators.py` → creates `ticker_technical_embeddings`
+   - Company embeddings table → `ticker_company_embeddings`
+
+3. **Databricks Foundation Model endpoints** must be accessible:
+   - `databricks-gte-large-en` (for query embeddings)
+   - `databricks-meta-llama-3-1-70b-instruct` (for AI summaries)
+
+### Testing
+
+**Check system status:**
+```bash
+curl http://localhost:8000/api/semantic_search/test
+```
+
+This returns the status of all components:
+- Database connection
+- pgvector extension
+- Embedding tables (existence + row counts)
+- Embedding endpoint
+- LLM endpoint
+
+**Run a test search:**
+```bash
+curl -X POST http://localhost:8000/api/semantic_search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "semiconductor companies with strong growth", "top_k": 10}'
+```
+
+### Expected Response Format
+
+```json
+{
+  "success": true,
+  "ai_summary": "AI-generated analysis of the results...",
+  "results": {
+    "query": "semiconductor companies with strong growth",
+    "num_tickers": 5,
+    "tickers": [
+      {
+        "symbol": "NVDA",
+        "max_similarity": 0.87,
+        "sources": [
+          {
+            "source_table": "ticker_company_embeddings",
+            "similarity": 0.87,
+            "name": "NVIDIA Corporation",
+            "embedding_text": "Designs GPUs for gaming and AI..."
+          },
+          {
+            "source_table": "ticker_news_embeddings",
+            "similarity": 0.82,
+            "article_title": "NVIDIA Reports Strong Q4 Earnings",
+            "sentiment_score": 0.9
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Sample Queries
+
+- `"AI chip companies with bullish momentum"`
+- `"semiconductor stocks with positive news"`
+- `"technology companies with bearish technical indicators"`
+- `"renewable energy stocks with high volume"`
+
+### Troubleshooting
+
+If you get a 500 error:
+
+1. **Run the diagnostic endpoint first**: `GET /api/semantic_search/test`
+2. **Check the errors array** in the response - it will tell you exactly what's missing
+3. **Common issues**:
+   - **pgvector not installed**: Run `CREATE EXTENSION vector;` in your Lakebase database
+   - **Embedding tables don't exist**: Run the embedding generation notebooks listed above
+   - **Tables are empty**: The notebooks ran but didn't process any tickers - check your watchlist has data
+   - **Embedding endpoint unavailable**: The `databricks-gte-large-en` endpoint isn't accessible from your workspace
+
+### Architecture
+
+The semantic search pipeline:
+1. User submits natural language query
+2. Query is embedded using `databricks-gte-large-en` (1024-dim vector)
+3. Vector similarity search across 4 embedding tables using pgvector's `<=>` operator
+4. Results grouped by ticker, sorted by max similarity
+5. Top results passed to `databricks-meta-llama-3-1-70b-instruct` for summary generation
+
 ## Scheduling ETL Pipelines as Databricks Workflows
 
 All three notebooks can be scheduled as Databricks Workflows to keep your data fresh. Each is self-contained with configurable widgets for parameters.
@@ -337,7 +471,7 @@ Create jobs directly in the Databricks UI. Repeat these steps for each of the th
 - `metrics_table_name` = `ticker_metrics`
 - `massive_secret_scope` = `massive`
 - `massive_secret_key` = `api-key`
-- `massive_api_base_url` = `https://api.polygon.io`
+- `massive_api_base_url` = `https://api.massive.io`
 - `history_days` = `90`
 - `rate_limit_delay_seconds` = `12`
 
@@ -352,7 +486,7 @@ Create jobs directly in the Databricks UI. Repeat these steps for each of the th
 - `embedding_model` = `sentence-transformers/all-MiniLM-L6-v2`
 - `massive_secret_scope` = `massive`
 - `massive_secret_key` = `api-key`
-- `massive_api_base_url` = `https://api.polygon.io`
+- `massive_api_base_url` = `https://api.massive.io`
 - `news_fetch_limit` = `50`
 - `max_requests_per_minute` = `5`
 - `chunk_size` = `800`
@@ -366,7 +500,7 @@ Create jobs directly in the Databricks UI. Repeat these steps for each of the th
 - `indicators_table_name` = `technical_indicators`
 - `massive_secret_scope` = `massive`
 - `massive_secret_key` = `api-key`
-- `massive_api_base_url` = `https://api.polygon.io`
+- `massive_api_base_url` = `https://api.massive.io`
 - `max_requests_per_minute` = `5`
 - `data_limit_per_indicator` = `100`
 

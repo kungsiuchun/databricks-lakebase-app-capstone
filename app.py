@@ -35,7 +35,9 @@ from functools import wraps
 
 import requests
 from databricks.sdk import WorkspaceClient
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, Response, redirect, abort
+import numpy as np
+import psycopg2
 
 import lakebase
 from massive_client import MassiveClient
@@ -261,9 +263,10 @@ def ensure_price_history_table():
             vwap NUMERIC(12, 4),
             transactions INTEGER,
             timestamp_ms BIGINT,
+            timespan VARCHAR(10) DEFAULT 'day',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (symbol, date)
+            PRIMARY KEY (symbol, date, timespan)
         )
         """
     )
@@ -442,10 +445,10 @@ def _sync_price_history(client: MassiveClient, symbol: str, days: int = 90) -> i
                         f"""
                         INSERT INTO {PRICE_HISTORY_TABLE} (
                             symbol, date, open, high, low, close, volume, vwap,
-                            transactions, timestamp_ms, updated_at
+                            transactions, timestamp_ms, timespan, updated_at
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
-                        ON CONFLICT (symbol, date) DO UPDATE
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                        ON CONFLICT (symbol, date, timespan) DO UPDATE
                             SET open = EXCLUDED.open,
                                 high = EXCLUDED.high,
                                 low = EXCLUDED.low,
@@ -467,6 +470,7 @@ def _sync_price_history(client: MassiveClient, symbol: str, days: int = 90) -> i
                             bar.get("vw"), # vwap
                             bar.get("n"),  # transactions
                             timestamp_ms,
+                            'day',  # timespan - defaulting to 'day'
                         ),
                     )
                     count += 1
@@ -597,45 +601,9 @@ def ticker_detail():
     return render_template("ticker_detail.html")
 
 
-@app.route("/records")
-@rate_limit
-@require_api_key
-def list_records():
-    """Read records already synced into Lakebase."""
-    limit = int(request.args.get("limit", 100))
-    rows = lakebase.run_query(
-        f"SELECT id, payload, synced_at FROM {TABLE_NAME} ORDER BY synced_at DESC LIMIT %s",
-        (limit,),
-    )
-    return jsonify(rows)
-
-
-@app.route("/sync", methods=["POST"])
-@rate_limit
-@require_api_key
-def sync_from_massive():
-    """
-    Pull data from the Massive API (paginated, potentially huge dataset) and
-    upsert it into Lakebase in batches.
-    """
-    ensure_table()
-    client = MassiveClient()
-
-    path = request.json.get("path", "/records") if request.is_json else "/records"
-    batch_size = int(request.args.get("batch_size", 500))
-
-    batch = []
-    total = 0
-    for item in client.paginated_get(path):
-        batch.append(item)
-        if len(batch) >= batch_size:
-            total += _upsert_batch(batch)
-            batch = []
-
-    if batch:
-        total += _upsert_batch(batch)
-
-    return jsonify({"synced": total})
+# NOTE: /records and /sync endpoints removed - they referenced undefined
+# TABLE_NAME, ensure_table(), and _upsert_batch(). If you need generic
+# data sync endpoints, define the table schema and upsert logic first.
 
 
 @app.route("/news/sync", methods=["POST"])
@@ -1441,6 +1409,364 @@ def _upsert_news_batch(ticker: str, articles: list[dict]) -> int:
     return count
 
 
+
+
+# ============================================================================
+# Semantic Search Endpoint
+# ============================================================================
+
+def get_embedding(text: str) -> list[float]:
+    """Generate embedding using Databricks Foundation Model API."""
+    try:
+        response = _w.serving_endpoints.query(
+            name="databricks-gte-large-en",
+            inputs=[text]
+        )
+        embedding = response.predictions[0].embeddings[0]
+        return embedding
+    except Exception as e:
+        logger.exception(f"Error generating embedding: {e}")
+        raise
+
+
+def parallel_semantic_search(query_embedding: list[float], top_k: int = 5):
+    """
+    Perform parallel semantic search across all 4 embedding tables.
+    Returns combined results grouped by ticker.
+    """
+    all_results = []
+    
+    # All 4 embedding tables to search (matching frontend expectations)
+    embedding_tables = [
+        ("ticker_company_embeddings", ["symbol", "name", "embedding_text"]),
+        ("ticker_news_embeddings", ["symbol", "embedding_text", "article_title", "article_publisher", "sentiment_score"]),
+        ("ticker_technical_embeddings", ["symbol", "embedding_text"]),
+        ("ticker_price_embeddings", ["symbol", "embedding_text"])
+    ]
+    
+    query_vector_str = "[" + ",".join(map(str, query_embedding)) + "]"
+    
+    with lakebase.get_connection() as conn:
+        with conn.cursor() as cur:
+            for table_name, columns in embedding_tables:
+                try:
+                    # Check if table exists
+                    cur.execute(
+                        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = %s)",
+                        (table_name,)
+                    )
+                    if not cur.fetchone()[0]:
+                        logger.warning(f"Table {table_name} does not exist, skipping")
+                        continue
+                    
+                    # Build column selection
+                    col_list = ", ".join(columns)
+                    
+                    # Perform vector similarity search
+                    query = f"""
+                        SELECT {col_list}, 
+                               1 - (embedding <=> %s::vector) as similarity
+                        FROM {table_name}
+                        WHERE embedding IS NOT NULL
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                    """
+                    
+                    cur.execute(query, (query_vector_str, query_vector_str, top_k))
+                    rows = cur.fetchall()
+                    
+                    for row in rows:
+                        result = {
+                            "source_table": table_name,
+                            "similarity": float(row[-1])  # Last column is similarity
+                        }
+                        # Map columns to result
+                        for i, col in enumerate(columns):
+                            value = row[i]
+                            # Convert types for JSON serialization
+                            if hasattr(value, 'isoformat'):
+                                value = value.isoformat()
+                            elif hasattr(value, '__float__'):
+                                value = float(value)
+                            result[col] = value
+                        all_results.append(result)
+                    
+                except Exception as e:
+                    logger.warning(f"Error searching {table_name}: {e}")
+                    continue
+    
+    # Group results by ticker/symbol
+    ticker_map = {}
+    
+    for result in all_results:
+        symbol = result.get("symbol")
+        if not symbol:
+            continue
+            
+        if symbol not in ticker_map:
+            ticker_map[symbol] = {
+                "sources": [],
+                "max_similarity": 0
+            }
+        
+        ticker_map[symbol]["sources"].append(result)
+        ticker_map[symbol]["max_similarity"] = max(
+            ticker_map[symbol]["max_similarity"],
+            result["similarity"]
+        )
+    
+    # Convert to list and sort by max similarity
+    tickers = [
+        {
+            "symbol": symbol,
+            "max_similarity": data["max_similarity"],
+            "sources": sorted(data["sources"], key=lambda x: x["similarity"], reverse=True)
+        }
+        for symbol, data in ticker_map.items()
+    ]
+    
+    tickers.sort(key=lambda x: x["max_similarity"], reverse=True)
+    return tickers[:top_k]  # Return top K tickers
+
+
+@app.route("/api/semantic_search", methods=["POST"])
+def semantic_search_endpoint():
+    """
+    Semantic search endpoint that searches across company, news, technical, and price data.
+    
+    Request body:
+    {
+        "query": "semiconductor companies with strong growth",
+        "top_k": 10
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "ai_summary": "...",
+        "results": {
+            "query": "...",
+            "num_tickers": ...,
+            "tickers": [...]
+        }
+    }
+    """
+    try:
+        data = request.get_json()
+        query_text = data.get("query", "")
+        top_k = data.get("top_k", 5)
+        
+        if not query_text:
+            return jsonify({
+                "success": False,
+                "error": "Query text is required",
+                "ai_summary": "Please provide a search query.",
+                "results": {"query": "", "num_tickers": 0, "tickers": []}
+            }), 400
+        
+        logger.info(f"Semantic search query: {query_text}")
+        
+        # Try to generate query embedding
+        try:
+            query_embedding = get_embedding(query_text)
+            logger.info(f"Generated embedding with {len(query_embedding)} dimensions")
+        except Exception as e:
+            logger.error(f"Failed to generate embedding: {e}")
+            return jsonify({
+                "success": False,
+                "error": f"Embedding service unavailable: {str(e)}",
+                "ai_summary": "The semantic search embedding service is currently unavailable. Please ensure the 'databricks-gte-large-en' endpoint is accessible.",
+                "results": {"query": query_text, "num_tickers": 0, "tickers": []}
+            }), 503
+        
+        # Perform parallel search across all 4 embedding tables
+        try:
+            tickers = parallel_semantic_search(query_embedding, top_k)
+            logger.info(f"Found {len(tickers)} tickers")
+        except Exception as e:
+            logger.error(f"Failed to search embeddings: {e}")
+            return jsonify({
+                "success": False,
+                "error": f"Database search failed: {str(e)}",
+                "ai_summary": "The embedding tables are not available. Please run the embedding generation notebooks first: ingest_ticker_news_embeddings.py, ingest_price_pattern_embeddings.py, ingest_ticker_technical_indicators.py",
+                "results": {"query": query_text, "num_tickers": 0, "tickers": []}
+            }), 500
+        
+        # Check if we got any results
+        if not tickers or len(tickers) == 0:
+            return jsonify({
+                "success": True,
+                "ai_summary": f"No results found for '{query_text}'. The embedding tables may be empty. Try running the data ingestion notebooks first.",
+                "results": {"query": query_text, "num_tickers": 0, "tickers": []}
+            })
+        
+        # Build search results
+        search_results = {
+            "query": query_text,
+            "num_tickers": len(tickers),
+            "tickers": tickers
+        }
+        
+        # Generate AI summary using Databricks Foundation Model
+        try:
+            # Build context from top 3 tickers
+            context_parts = []
+            for ticker_data in tickers[:3]:
+                symbol = ticker_data["symbol"]
+                context_parts.append(f"\n### {symbol}")
+                
+                for source in ticker_data["sources"]:
+                    table = source["source_table"]
+                    if table == "ticker_company_embeddings":
+                        context_parts.append(f"Company: {source.get('name', 'N/A')}")
+                        context_parts.append(f"Description: {source.get('embedding_text', 'N/A')[:200]}")
+                    elif table == "ticker_news_embeddings":
+                        context_parts.append(f"News: {source.get('article_title')} (sentiment: {source.get('sentiment_score')})")
+                    elif table == "ticker_technical_embeddings":
+                        context_parts.append(f"Technical: {source.get('embedding_text', 'N/A')[:200]}")
+                    elif table == "ticker_price_embeddings":
+                        context_parts.append(f"Price: {source.get('embedding_text', 'N/A')[:200]}")
+            
+            context = "\n".join(context_parts)
+            prompt = f'''You are a financial analyst. User query: "{query_text}"
+
+Data from multiple sources:
+{context}
+
+Provide a concise 2-3 paragraph summary:'''
+            
+            # Use Databricks Foundation Model API
+            response = _w.serving_endpoints.query(
+                name="databricks-meta-llama-3-1-70b-instruct",
+                inputs=[{"prompt": prompt}]
+            )
+            
+            ai_summary = response.predictions[0].candidates[0].text.strip()
+            logger.info("Generated AI summary successfully")
+        except Exception as e:
+            logger.warning(f"Error generating AI summary: {e}")
+            ticker_list = ", ".join([t["symbol"] for t in tickers[:3]])
+            ai_summary = f"Found {len(tickers)} tickers matching your query: {ticker_list}"
+        
+        return jsonify({
+            "success": True,
+            "ai_summary": ai_summary,
+            "results": search_results
+        })
+    
+    except Exception as e:
+        logger.exception(f"Unexpected error in semantic search: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "ai_summary": f"An unexpected error occurred: {str(e)}",
+            "results": {"query": query_text if 'query_text' in locals() else "", "num_tickers": 0, "tickers": []}
+        }), 500
+
+
+@app.route("/api/semantic_search/test", methods=["GET"])
+def test_semantic_search():
+    """
+    Test endpoint to diagnose semantic search setup issues.
+    Returns status of all required components.
+    """
+    status = {
+        "database_connection": False,
+        "pgvector_extension": False,
+        "embedding_tables": {},
+        "embedding_endpoint": False,
+        "llm_endpoint": False,
+        "errors": []
+    }
+    
+    # Test database connection
+    try:
+        with lakebase.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                status["database_connection"] = True
+                
+                # Check pgvector extension
+                try:
+                    cur.execute("SELECT extname FROM pg_extension WHERE extname = 'vector'")
+                    if cur.fetchone():
+                        status["pgvector_extension"] = True
+                    else:
+                        status["errors"].append("pgvector extension not installed. Run: CREATE EXTENSION vector;")
+                except Exception as e:
+                    status["errors"].append(f"Cannot check pgvector: {e}")
+                
+                # Check embedding tables
+                tables = [
+                    "ticker_company_embeddings",
+                    "ticker_news_embeddings",
+                    "ticker_technical_embeddings",
+                    "ticker_price_embeddings"
+                ]
+                
+                for table in tables:
+                    try:
+                        cur.execute(
+                            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = %s)",
+                            (table,)
+                        )
+                        exists = cur.fetchone()[0]
+                        
+                        if exists:
+                            cur.execute(f"SELECT COUNT(*) FROM {table}")
+                            count = cur.fetchone()[0]
+                            status["embedding_tables"][table] = {"exists": True, "rows": count}
+                        else:
+                            status["embedding_tables"][table] = {"exists": False, "rows": 0}
+                            status["errors"].append(f"Table {table} does not exist. Run the embedding generation notebook.")
+                    except Exception as e:
+                        status["embedding_tables"][table] = {"exists": False, "error": str(e)}
+                        status["errors"].append(f"Error checking {table}: {e}")
+    
+    except Exception as e:
+        status["errors"].append(f"Database connection failed: {e}")
+    
+    # Test embedding endpoint
+    try:
+        test_embedding = get_embedding("test")
+        if test_embedding and len(test_embedding) > 0:
+            status["embedding_endpoint"] = True
+    except Exception as e:
+        status["errors"].append(f"Embedding endpoint failed: {e}")
+    
+    # Test LLM endpoint
+    try:
+        response = _w.serving_endpoints.query(
+            name="databricks-meta-llama-3-1-70b-instruct",
+            inputs=[{"prompt": "test"}]
+        )
+        if response and response.predictions:
+            status["llm_endpoint"] = True
+    except Exception as e:
+        status["errors"].append(f"LLM endpoint failed: {e}")
+    
+    # Overall status
+    all_ok = (
+        status["database_connection"] and
+        status["pgvector_extension"] and
+        status["embedding_endpoint"] and
+        all(t.get("exists") and t.get("rows", 0) > 0 for t in status["embedding_tables"].values())
+    )
+    
+    status["ready"] = all_ok
+    
+    if not all_ok:
+        status["message"] = "Semantic search is not ready. See errors for details."
+    else:
+        status["message"] = "All systems operational!"
+    
+    return jsonify(status)
+
+
+@app.route("/search")
+def search_page():
+    """Render the semantic search frontend."""
+    return render_template("search.html")
 
 
 if __name__ == '__main__':

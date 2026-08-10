@@ -93,6 +93,26 @@
             background: #2563eb;
         }
 
+        .semantic-search-btn {
+            padding: 0.75rem 1.5rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: transform 0.2s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 500;
+        }
+
+        .semantic-search-btn:hover {
+            transform: translateY(-2px);
+        }
+
         /* Main Content */
         .container {
             max-width: 1920px;
@@ -260,6 +280,10 @@
                 >
                 <button id="search-btn" class="search-btn">🔍 Search</button>
             </div>
+            
+            <a href="/search" class="semantic-search-btn">
+                ✨ AI Search
+            </a>
         </div>
     </nav>
 

@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Financial Semantic Search</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+        
+        .search-box {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+        
+        .search-input {
+            width: 100%;
+            padding: 15px;
+            font-size: 1.1rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+        
+        .search-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .search-button {
+            width: 100%;
+            padding: 15px;
+            font-size: 1.1rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .search-button:hover {
+            transform: translateY(-2px);
+        }
+        
+        .search-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .results {
+            display: none;
+        }
+        
+        .results.show {
+            display: block;
+        }
+        
+        .ai-summary {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+        
+        .ai-summary h2 {
+            color: #764ba2;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .ai-summary h2::before {
+            content: "✨";
+            margin-right: 10px;
+        }
+        
+        .ticker-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 20px;
+        }
+        
+        .ticker-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .ticker-symbol {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .similarity-badge {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+        }
+        
+        .source-item {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+        }
+        
+        .source-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .source-type {
+            font-weight: bold;
+            color: #667eea;
+            text-transform: uppercase;
+            font-size: 0.9rem;
+        }
+        
+        .source-score {
+            background: #667eea;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+        }
+        
+        .source-text {
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: white;
+            font-size: 1.2rem;
+        }
+        
+        .error {
+            background: #fff;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            color: #e53e3e;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Financial Semantic Search</h1>
+            <p>Query across company data, technical indicators, price patterns, and news</p>
+        </div>
+        
+        <div class="search-box">
+            <input 
+                type="text" 
+                id="searchInput" 
+                class="search-input" 
+                placeholder="Try: 'AI chip companies with bullish momentum' or 'semiconductor stocks with positive news'"
+            >
+            <button id="searchButton" class="search-button">Search</button>
+        </div>
+        
+        <div id="loading" class="loading" style="display: none;">
+            <p>🔄 Searching across all financial data...</p>
+        </div>
+        
+        <div id="error" class="error" style="display: none;"></div>
+        
+        <div id="results" class="results">
+            <div id="aiSummary" class="ai-summary">
+                <h2>AI Summary</h2>
+                <p id="summaryText"></p>
+            </div>
+            
+            <div id="tickerResults"></div>
+        </div>
+    </div>
+    
+    <script>
+        const searchInput = document.getElementById('searchInput');
+        const searchButton = document.getElementById('searchButton');
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const results = document.getElementById('results');
+        const summaryText = document.getElementById('summaryText');
+        const tickerResults = document.getElementById('tickerResults');
+        
+        searchButton.addEventListener('click', performSearch);
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') performSearch();
+        });
+        
+        async function performSearch() {
+            const query = searchInput.value.trim();
+            
+            if (!query) {
+                alert('Please enter a search query');
+                return;
+            }
+            
+            // Show loading, hide results/error
+            loading.style.display = 'block';
+            results.classList.remove('show');
+            error.style.display = 'none';
+            searchButton.disabled = true;
+            
+            try {
+                const response = await fetch('/api/semantic_search', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ query, top_k: 10 })
+                });
+                
+                const data = await response.json();
+                
+                // Handle both success and error cases
+                if (data.success === false || data.error) {
+                    // Show error with helpful message
+                    error.innerHTML = `<strong>Error:</strong> ${data.error || 'Search failed'}<br><br>${data.ai_summary || ''}`;
+                    error.style.display = 'block';
+                    return;
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`Search failed: ${response.statusText}`);
+                }
+                
+                displayResults(data);
+                
+            } catch (err) {
+                console.error('Search error:', err);
+                error.textContent = `Error: ${err.message}`;
+                error.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+                searchButton.disabled = false;
+            }
+        }
+        
+        function displayResults(data) {
+            // Show AI summary
+            summaryText.textContent = data.ai_summary;
+            
+            // Clear previous ticker results
+            tickerResults.innerHTML = '';
+            
+            // Display ticker cards
+            const tickers = data.results.tickers;
+            
+            if (tickers.length === 0) {
+                tickerResults.innerHTML = '<p style="text-align: center; color: #666;">No results found</p>';
+            } else {
+                tickers.forEach(ticker => {
+                    const card = createTickerCard(ticker);
+                    tickerResults.appendChild(card);
+                });
+            }
+            
+            results.classList.add('show');
+        }
+        
+        function createTickerCard(ticker) {
+            const card = document.createElement('div');
+            card.className = 'ticker-card';
+            
+            // Header
+            const header = document.createElement('div');
+            header.className = 'ticker-header';
+            header.innerHTML = `
+                <div class="ticker-symbol">${ticker.symbol}</div>
+                <div class="similarity-badge">Match: ${(ticker.max_similarity * 100).toFixed(1)}%</div>
+            `;
+            card.appendChild(header);
+            
+            // Sources
+            ticker.sources.forEach(source => {
+                const sourceDiv = createSourceItem(source);
+                card.appendChild(sourceDiv);
+            });
+            
+            return card;
+        }
+        
+        function createSourceItem(source) {
+            const div = document.createElement('div');
+            div.className = 'source-item';
+            
+            const sourceType = source.source_table
+                .replace('ticker_', '')
+                .replace('_embeddings', '')
+                .replace('_', ' ');
+            
+            const header = document.createElement('div');
+            header.className = 'source-header';
+            header.innerHTML = `
+                <span class="source-type">${sourceType}</span>
+                <span class="source-score">${(source.similarity * 100).toFixed(1)}%</span>
+            `;
+            div.appendChild(header);
+            
+            const text = document.createElement('div');
+            text.className = 'source-text';
+            
+            // Format source-specific text
+            if (source.source_table === 'ticker_company_embeddings') {
+                text.innerHTML = `
+                    <strong>${source.name || source.symbol}</strong><br>
+                    ${source.embedding_text || 'No description available'}
+                `;
+            } else if (source.source_table === 'ticker_news_embeddings') {
+                const sentiment = source.sentiment_score ? ` (sentiment: ${source.sentiment_score})` : '';
+                text.innerHTML = `
+                    <strong>${source.article_title || 'News article'}</strong>${sentiment}<br>
+                    ${source.article_publisher || ''}
+                `;
+            } else {
+                text.textContent = source.embedding_text || 'No data available';
+            }
+            
+            div.appendChild(text);
+            return div;
+        }
+    </script>
+</body>
+</html>
